@@ -56,7 +56,9 @@ io.on('connection', (socket) => {
     }
     
     // Add this socket to the user's array of sockets
-    userSockets[userId].push(socket.id);
+    if (!userSockets[userId].includes(socket.id)) {
+      userSockets[userId].push(socket.id);
+    }
     console.log(`User ${userId} joined with socket ${socket.id}`);
     console.log(`User ${userId} now has ${userSockets[userId].length} active sessions`);
   });

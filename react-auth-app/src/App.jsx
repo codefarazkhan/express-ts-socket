@@ -51,6 +51,17 @@ function App() {
         }
       });
 
+      // Handle disconnection and reconnection
+      newSocket.on('disconnect', () => {
+        console.log('Socket disconnected, attempting to reconnect...');
+      });
+
+      newSocket.on('connect', () => {
+        console.log('Socket connected/reconnected');
+        // Re-join the socket room with user ID when reconnected
+        newSocket.emit('join', tokenPayload.id);
+      });
+
       return () => {
         newSocket.close();
       };
