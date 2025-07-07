@@ -3,7 +3,18 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
+
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
 app.use(bodyParser.json());
 app.use(cors());
 
@@ -26,6 +37,30 @@ const chatSchema = new mongoose.Schema({
 const Chat = mongoose.model('Chat', chatSchema);
 
 const SECRET = 'your_secret_key';
+
+// Store socket connections by user ID
+const userSockets = new Map();
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  socket.on('join', (userId) => {
+    userSockets.set(userId, socket.id);
+    console.log(`User ${userId} joined with socket ${socket.id}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    // Remove user from socket map
+    for (const [userId, socketId] of userSockets.entries()) {
+      if (socketId === socket.id) {
+        userSockets.delete(userId);
+        break;
+      }
+    }
+  });
+});
 
 const authMiddleware = async (req, res, next) => {
   const token = req.headers.authorization && req.headers.authorization.split(' ')[1];
@@ -84,7 +119,20 @@ app.post('/chat', authMiddleware, async (req, res) => {
   });
   
   await chat.save();
-  res.json({ message: 'Message sent successfully', chat });
+  
+  // Emit to receiver if online
+  const receiverSocketId = userSockets.get(receiverId);
+  if (receiverSocketId) {
+    io.to(receiverSocketId).emit('newMessage', "chat");
+  }
+  
+  // Emit to sender for confirmation
+  const senderSocketId = userSockets.get(req.userId);
+  if (senderSocketId) {
+    io.to(senderSocketId).emit('messageSent', "chat");
+  }
+  
+  res.json({ message: 'Message sent successfully', chat: "chat" });
 });
 
 // Get chat messages between current user and another user
@@ -104,4 +152,4 @@ app.get('/chat/:userId', authMiddleware, async (req, res) => {
   res.json(messages);
 });
 
-app.listen(3000, () => console.log('Server running on http://localhost:3000'));
+server.listen(3000, () => console.log('Server running on http://localhost:3000'));
