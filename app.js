@@ -111,14 +111,24 @@ app.post('/chat', authMiddleware, async (req, res) => {
   if (!receiverId || !message) {
     return res.status(400).json({ message: 'Receiver ID and message are required' });
   }
+
+  console.log("message", req.userId, receiverId);
   
   const chat = new Chat({
     senderId: req.userId,
     receiverId,
     message
   });
+
+  console.log("chat before save", {
+    senderId: req.userId,
+    receiverId,
+    message
+  });
   
   await chat.save();
+
+  console.log("chat after save", chat);
   
   // Emit to receiver if online
   const receiverSocketId = userSockets.get(receiverId);

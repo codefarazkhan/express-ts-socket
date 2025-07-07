@@ -132,7 +132,7 @@ function App() {
 
   const sendMessage = async () => {
     if (!newMessage.trim()) return;
-    
+
     const res = await fetch(`${API}/chat`, {
       method: 'POST',
       headers: {
