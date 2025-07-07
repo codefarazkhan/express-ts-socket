@@ -5,15 +5,29 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { createClient } = require('redis');
 
 const app = express();
 const server = http.createServer(app);
+
+// Create Redis clients
+const pubClient = createClient({ url: 'redis://localhost:6379' });
+const subClient = pubClient.duplicate();
+
+// Initialize Socket.IO with Redis adapter
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   }
 });
+
+// Connect Redis clients and setup adapter
+Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log('Redis adapter connected successfully');
+}).catch(console.error);
 
 app.use(bodyParser.json());
 app.use(cors());
@@ -38,50 +52,91 @@ const Chat = mongoose.model('Chat', chatSchema);
 
 const SECRET = 'your_secret_key';
 
-// Store multiple socket connections by user ID (one user can have multiple sessions)
-const userSockets = {}; // userId -> array of socketIds
+// Store multiple socket connections by user ID using Redis
+const REDIS_USER_SOCKETS_KEY = 'userSockets';
 
-setInterval(() => {
-  console.log("userSockets", userSockets);
+// Helper functions for Redis operations
+const getUserSockets = async (userId) => {
+  try {
+    const sockets = await pubClient.sMembers(`${REDIS_USER_SOCKETS_KEY}:${userId}`);
+    return sockets;
+  } catch (error) {
+    console.error('Error getting user sockets:', error);
+    return [];
+  }
+};
+
+const addUserSocket = async (userId, socketId) => {
+  try {
+    await pubClient.sAdd(`${REDIS_USER_SOCKETS_KEY}:${userId}`, socketId);
+    console.log(`User ${userId} joined with socket ${socketId}`);
+    const socketCount = await pubClient.sCard(`${REDIS_USER_SOCKETS_KEY}:${userId}`);
+    console.log(`User ${userId} now has ${socketCount} active sessions`);
+  } catch (error) {
+    console.error('Error adding user socket:', error);
+  }
+};
+
+const removeUserSocket = async (userId, socketId) => {
+  try {
+    await pubClient.sRem(`${REDIS_USER_SOCKETS_KEY}:${userId}`, socketId);
+    const socketCount = await pubClient.sCard(`${REDIS_USER_SOCKETS_KEY}:${userId}`);
+    
+    if (socketCount === 0) {
+      await pubClient.del(`${REDIS_USER_SOCKETS_KEY}:${userId}`);
+      console.log(`User ${userId} has no more active sessions`);
+    } else {
+      console.log(`User ${userId} still has ${socketCount} active sessions`);
+    }
+  } catch (error) {
+    console.error('Error removing user socket:', error);
+  }
+};
+
+const removeSocketFromAllUsers = async (socketId) => {
+  try {
+    const keys = await pubClient.keys(`${REDIS_USER_SOCKETS_KEY}:*`);
+    for (const key of keys) {
+      const userId = key.split(':')[1];
+      const isMember = await pubClient.sIsMember(key, socketId);
+      if (isMember) {
+        await removeUserSocket(userId, socketId);
+        console.log(`Removed socket ${socketId} from user ${userId}`);
+        break;
+      }
+    }
+  } catch (error) {
+    console.error('Error removing socket from all users:', error);
+  }
+};
+
+setInterval(async () => {
+  try {
+    const keys = await pubClient.keys(`${REDIS_USER_SOCKETS_KEY}:*`);
+    const userSockets = {};
+    for (const key of keys) {
+      const userId = key.split(':')[1];
+      const sockets = await pubClient.sMembers(key);
+      userSockets[userId] = sockets;
+    }
+    console.log("userSockets", userSockets);
+  } catch (error) {
+    console.error('Error logging user sockets:', error);
+  }
 }, 5000);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  socket.on('join', (userId) => {
-    // Initialize the array if it doesn't exist for this user
-    if (!userSockets[userId]) {
-      userSockets[userId] = [];
-    }
-    
-    // Add this socket to the user's array of sockets
-    if (!userSockets[userId].includes(socket.id)) {
-      userSockets[userId].push(socket.id);
-    }
-    console.log(`User ${userId} joined with socket ${socket.id}`);
-    console.log(`User ${userId} now has ${userSockets[userId].length} active sessions`);
+  socket.on('join', async (userId) => {
+    await addUserSocket(userId, socket.id);
+    socket.join(`user:${userId}`);
   });
 
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log('User disconnected:', socket.id);
-    // Remove socket from all users' socket arrays
-    for (const userId in userSockets) {
-      const socketIndex = userSockets[userId].indexOf(socket.id);
-      if (socketIndex !== -1) {
-        userSockets[userId].splice(socketIndex, 1);
-        console.log(`Removed socket ${socket.id} from user ${userId}`);
-        
-        // If user has no more active sockets, remove the user entry
-        if (userSockets[userId].length === 0) {
-          delete userSockets[userId];
-          console.log(`User ${userId} has no more active sessions`);
-        } else {
-          console.log(`User ${userId} still has ${userSockets[userId].length} active sessions`);
-        }
-        break;
-      }
-    }
+    await removeSocketFromAllUsers(socket.id);
   });
 });
 
@@ -149,22 +204,18 @@ app.post('/chat', authMiddleware, async (req, res) => {
     .populate('senderId', 'username')
     .populate('receiverId', 'username');
 
-  // Emit to all receiver's active sessions if online
-  const receiverSocketArray = userSockets[receiverId];
-  if (receiverSocketArray && receiverSocketArray.length > 0) {
-    receiverSocketArray.forEach(socketId => {
-      io.to(socketId).emit('newMessage', latestMessage);
-    });
-    console.log(`Message sent to ${receiverSocketArray.length} sessions of receiver ${receiverId}`);
+  // Emit to all receiver's active sessions if online using room-based approach
+  const receiverSockets = await getUserSockets(receiverId);
+  if (receiverSockets.length > 0) {
+    io.to(`user:${receiverId}`).emit('newMessage', latestMessage);
+    console.log(`Message sent to ${receiverSockets.length} sessions of receiver ${receiverId}`);
   }
   
-  // Emit to all sender's active sessions for confirmation
-  const senderSocketArray = userSockets[req.userId];
-  if (senderSocketArray && senderSocketArray.length > 0) {
-    senderSocketArray.forEach(socketId => {
-      io.to(socketId).emit('messageSent', latestMessage);
-    });
-    console.log(`Message confirmation sent to ${senderSocketArray.length} sessions of sender ${req.userId}`);
+  // Emit to all sender's active sessions for confirmation using room-based approach
+  const senderSockets = await getUserSockets(req.userId);
+  if (senderSockets.length > 0) {
+    io.to(`user:${req.userId}`).emit('messageSent', latestMessage);
+    console.log(`Message confirmation sent to ${senderSockets.length} sessions of sender ${req.userId}`);
   }
   
   res.json({ message: 'Message sent successfully', chat: latestMessage });
