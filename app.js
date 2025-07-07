@@ -39,7 +39,7 @@ const Chat = mongoose.model('Chat', chatSchema);
 const SECRET = 'your_secret_key';
 
 // Store multiple socket connections by user ID (one user can have multiple sessions)
-const userSockets = new Map(); // userId -> Set of socketIds
+const userSockets = {}; // userId -> array of socketIds
 
 setInterval(() => {
   console.log("userSockets", userSockets);
@@ -50,31 +50,32 @@ io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
   socket.on('join', (userId) => {
-    // Initialize the set if it doesn't exist for this user
-    if (!userSockets.has(userId)) {
-      userSockets.set(userId, new Set());
+    // Initialize the array if it doesn't exist for this user
+    if (!userSockets[userId]) {
+      userSockets[userId] = [];
     }
     
-    // Add this socket to the user's set of sockets
-    userSockets.get(userId).add(socket.id);
+    // Add this socket to the user's array of sockets
+    userSockets[userId].push(socket.id);
     console.log(`User ${userId} joined with socket ${socket.id}`);
-    console.log(`User ${userId} now has ${userSockets.get(userId).size} active sessions`);
+    console.log(`User ${userId} now has ${userSockets[userId].length} active sessions`);
   });
 
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    // Remove socket from all users' socket sets
-    for (const [userId, socketSet] of userSockets.entries()) {
-      if (socketSet.has(socket.id)) {
-        socketSet.delete(socket.id);
+    // Remove socket from all users' socket arrays
+    for (const userId in userSockets) {
+      const socketIndex = userSockets[userId].indexOf(socket.id);
+      if (socketIndex !== -1) {
+        userSockets[userId].splice(socketIndex, 1);
         console.log(`Removed socket ${socket.id} from user ${userId}`);
         
         // If user has no more active sockets, remove the user entry
-        if (socketSet.size === 0) {
-          userSockets.delete(userId);
+        if (userSockets[userId].length === 0) {
+          delete userSockets[userId];
           console.log(`User ${userId} has no more active sessions`);
         } else {
-          console.log(`User ${userId} still has ${socketSet.size} active sessions`);
+          console.log(`User ${userId} still has ${userSockets[userId].length} active sessions`);
         }
         break;
       }
@@ -147,21 +148,21 @@ app.post('/chat', authMiddleware, async (req, res) => {
     .populate('receiverId', 'username');
 
   // Emit to all receiver's active sessions if online
-  const receiverSocketSet = userSockets.get(receiverId);
-  if (receiverSocketSet && receiverSocketSet.size > 0) {
-    receiverSocketSet.forEach(socketId => {
+  const receiverSocketArray = userSockets[receiverId];
+  if (receiverSocketArray && receiverSocketArray.length > 0) {
+    receiverSocketArray.forEach(socketId => {
       io.to(socketId).emit('newMessage', latestMessage);
     });
-    console.log(`Message sent to ${receiverSocketSet.size} sessions of receiver ${receiverId}`);
+    console.log(`Message sent to ${receiverSocketArray.length} sessions of receiver ${receiverId}`);
   }
   
   // Emit to all sender's active sessions for confirmation
-  const senderSocketSet = userSockets.get(req.userId);
-  if (senderSocketSet && senderSocketSet.size > 0) {
-    senderSocketSet.forEach(socketId => {
+  const senderSocketArray = userSockets[req.userId];
+  if (senderSocketArray && senderSocketArray.length > 0) {
+    senderSocketArray.forEach(socketId => {
       io.to(socketId).emit('messageSent', latestMessage);
     });
-    console.log(`Message confirmation sent to ${senderSocketSet.size} sessions of sender ${req.userId}`);
+    console.log(`Message confirmation sent to ${senderSocketArray.length} sessions of sender ${req.userId}`);
   }
   
   res.json({ message: 'Message sent successfully', chat: latestMessage });
