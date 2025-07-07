@@ -111,8 +111,6 @@ app.post('/chat', authMiddleware, async (req, res) => {
   if (!receiverId || !message) {
     return res.status(400).json({ message: 'Receiver ID and message are required' });
   }
-
-  console.log("message", req.userId, receiverId);
   
   const chat = new Chat({
     senderId: req.userId,
@@ -120,29 +118,27 @@ app.post('/chat', authMiddleware, async (req, res) => {
     message
   });
 
-  console.log("chat before save", {
-    senderId: req.userId,
-    receiverId,
-    message
-  });
   
   await chat.save();
 
-  console.log("chat after save", chat);
-  
+  // Populate the latest message
+  const latestMessage = await Chat.findById(chat._id)
+    .populate('senderId', 'username')
+    .populate('receiverId', 'username');
+
   // Emit to receiver if online
   const receiverSocketId = userSockets.get(receiverId);
   if (receiverSocketId) {
-    io.to(receiverSocketId).emit('newMessage', "chat");
+    io.to(receiverSocketId).emit('newMessage', latestMessage);
   }
   
   // Emit to sender for confirmation
   const senderSocketId = userSockets.get(req.userId);
   if (senderSocketId) {
-    io.to(senderSocketId).emit('messageSent', "chat");
+    io.to(senderSocketId).emit('messageSent', latestMessage);
   }
   
-  res.json({ message: 'Message sent successfully', chat: "chat" });
+  res.json({ message: 'Message sent successfully', chat: latestMessage });
 });
 
 // Get chat messages between current user and another user

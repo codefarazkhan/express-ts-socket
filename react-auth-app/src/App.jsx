@@ -38,16 +38,16 @@ function App() {
       newSocket.emit('join', tokenPayload.id);
 
       // Listen for new messages
-      newSocket.on('newMessage', () => {
-        if (selectedUser) {
-          fetchMessages(selectedUser._id);
+      newSocket.on('newMessage', (latestMessage) => {
+        if (selectedUser && (latestMessage.senderId._id === selectedUser._id || latestMessage.receiverId._id === selectedUser._id)) {
+          setMessages(prevMessages => [...prevMessages, latestMessage]);
         }
       });
 
       // Listen for message sent confirmation
-      newSocket.on('messageSent', () => {
-        if (selectedUser) {
-          fetchMessages(selectedUser._id);
+      newSocket.on('messageSent', (latestMessage) => {
+        if (selectedUser && (latestMessage.senderId._id === selectedUser._id || latestMessage.receiverId._id === selectedUser._id)) {
+          setMessages(prevMessages => [...prevMessages, latestMessage]);
         }
       });
 
@@ -147,6 +147,7 @@ function App() {
     
     if (res.ok) {
       setNewMessage('');
+      // Don't call fetchMessages here anymore - let socket handle the update
     }
   };
 
