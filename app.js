@@ -16,6 +16,15 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
+const chatSchema = new mongoose.Schema({
+  senderId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  receiverId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  message: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now }
+});
+
+const Chat = mongoose.model('Chat', chatSchema);
+
 const SECRET = 'your_secret_key';
 
 const authMiddleware = async (req, res, next) => {
@@ -33,6 +42,13 @@ const authMiddleware = async (req, res, next) => {
 // Signup
 app.post('/signup', async (req, res) => {
   const { username, password } = req.body;
+  
+  // Check if username already exists
+  const existingUser = await User.findOne({ username });
+  if (existingUser) {
+    return res.status(400).json({ message: 'Username already exists' });
+  }
+  
   const user = new User({ username, password });
   await user.save();
   res.json({ message: 'User created' });
@@ -51,6 +67,41 @@ app.post('/signin', async (req, res) => {
 app.get('/users', authMiddleware, async (req, res) => {
   const users = await User.find({ _id: { $ne: req.userId } }, { password: 0 });
   res.json(users);
+});
+
+// Send message
+app.post('/chat', authMiddleware, async (req, res) => {
+  const { receiverId, message } = req.body;
+  
+  if (!receiverId || !message) {
+    return res.status(400).json({ message: 'Receiver ID and message are required' });
+  }
+  
+  const chat = new Chat({
+    senderId: req.userId,
+    receiverId,
+    message
+  });
+  
+  await chat.save();
+  res.json({ message: 'Message sent successfully', chat });
+});
+
+// Get chat messages between current user and another user
+app.get('/chat/:userId', authMiddleware, async (req, res) => {
+  const { userId } = req.params;
+  
+  const messages = await Chat.find({
+    $or: [
+      { senderId: req.userId, receiverId: userId },
+      { senderId: userId, receiverId: req.userId }
+    ]
+  })
+  .populate('senderId', 'username')
+  .populate('receiverId', 'username')
+  .sort({ timestamp: 1 });
+  
+  res.json(messages);
 });
 
 app.listen(3000, () => console.log('Server running on http://localhost:3000'));

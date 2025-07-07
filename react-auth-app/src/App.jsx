@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const API = 'http://localhost:3000';
 
@@ -8,6 +8,18 @@ function App() {
   const [token, setToken] = useState('');
   const [users, setUsers] = useState([]);
   const [isSignedIn, setIsSignedIn] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+
+  // Load token from localStorage on component mount
+  useEffect(() => {
+    const savedToken = localStorage.getItem('authToken');
+    if (savedToken) {
+      setToken(savedToken);
+      setIsSignedIn(true);
+    }
+  }, []);
 
   const signup = async () => {
     await fetch(`${API}/signup`, {
@@ -28,10 +40,21 @@ function App() {
     if (data.token) {
       setToken(data.token);
       setIsSignedIn(true);
+      localStorage.setItem('authToken', data.token);
       alert('Signed in!');
     } else {
       alert('Login failed');
     }
+  };
+
+  const signout = () => {
+    setToken('');
+    setIsSignedIn(false);
+    setUsers([]);
+    setSelectedUser(null);
+    setMessages([]);
+    setNewMessage('');
+    localStorage.removeItem('authToken');
   };
 
   const fetchUsers = async () => {
@@ -42,6 +65,45 @@ function App() {
     });
     const data = await res.json();
     setUsers(data);
+  };
+
+  const openChat = async (user) => {
+    setSelectedUser(user);
+    const res = await fetch(`${API}/chat/${user._id}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const data = await res.json();
+    setMessages(data);
+  };
+
+  const sendMessage = async () => {
+    if (!newMessage.trim()) return;
+    
+    const res = await fetch(`${API}/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        receiverId: selectedUser._id,
+        message: newMessage,
+      }),
+    });
+    
+    if (res.ok) {
+      setNewMessage('');
+      // Refresh messages
+      openChat(selectedUser);
+    }
+  };
+
+  const closeChat = () => {
+    setSelectedUser(null);
+    setMessages([]);
+    setNewMessage('');
   };
 
   return (
@@ -64,13 +126,51 @@ function App() {
           <button onClick={signup}>Signup</button>
           <button onClick={signin}>Signin</button>
         </>
+      ) : selectedUser ? (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2>Chat with {selectedUser.username}</h2>
+            <div>
+              <button onClick={closeChat} style={{ marginRight: 10 }}>Cancel Chat</button>
+              <button onClick={signout}>Sign Out</button>
+            </div>
+          </div>
+          <div style={{ border: '1px solid #ccc', height: 300, overflowY: 'scroll', padding: 10, marginBottom: 10 }}>
+            {messages.map((msg, index) => (
+              <div key={index} style={{ marginBottom: 10 }}>
+                <strong>{msg.senderId.username}:</strong> {msg.message}
+                <div style={{ fontSize: '12px', color: '#666' }}>
+                  {new Date(msg.timestamp).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <input
+              type="text"
+              placeholder="Type your message..."
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+              style={{ flex: 1 }}
+            />
+            <button onClick={sendMessage}>Send</button>
+          </div>
+        </>
       ) : (
         <>
-          <h2>Users List (excluding you)</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h2>Users List (excluding you)</h2>
+            <button onClick={signout}>Sign Out</button>
+          </div>
           <button onClick={fetchUsers}>Load Users</button>
           <ul>
             {users.map((u) => (
-              <li key={u._id}>{u.username}</li>
+              <li key={u._id} style={{ cursor: 'pointer', marginBottom: 5 }}>
+                <span onClick={() => openChat(u)} style={{ color: 'blue', textDecoration: 'underline' }}>
+                  {u.username}
+                </span>
+              </li>
             ))}
           </ul>
         </>
