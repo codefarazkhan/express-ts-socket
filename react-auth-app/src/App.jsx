@@ -21,6 +21,13 @@ function App() {
     }
   }, []);
 
+  // Fetch users when signed in
+  useEffect(() => {
+    if (isSignedIn && token) {
+      fetchUsers();
+    }
+  }, [isSignedIn, token]);
+
   const signup = async () => {
     await fetch(`${API}/signup`, {
       method: 'POST',
@@ -163,7 +170,6 @@ function App() {
             <h2>Users List (excluding you)</h2>
             <button onClick={signout}>Sign Out</button>
           </div>
-          <button onClick={fetchUsers}>Load Users</button>
           <ul>
             {users.map((u) => (
               <li key={u._id} style={{ cursor: 'pointer', marginBottom: 5 }}>
